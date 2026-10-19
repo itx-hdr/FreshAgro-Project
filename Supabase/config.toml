@@ -1,0 +1,3 @@
+[functions.ingest]
+verify_jwt = false
+# The handler verifies its own per-device token. Database keys never reach the ESP32.
