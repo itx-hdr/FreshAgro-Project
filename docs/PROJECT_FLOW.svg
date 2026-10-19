@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1000" viewBox="0 0 1440 1000" role="img" aria-labelledby="title desc">
+  <title id="title">FreshAgro project flow</title>
+  <desc id="desc">ESP32-C3 wakes every ten minutes, validates three sensors, records sensor status and queues a sample, then securely uploads a batch to Supabase. Supabase stores and deduplicates readings. The Vercel dashboard reads the stored history.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 z" fill="#718078"/></marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 z" fill="#16824a"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#173a2b" flood-opacity=".08"/></filter>
+    <style>
+      .title{font:700 34px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#143b2a}
+      .subtitle{font:400 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#607067}
+      .lane{font:700 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:1.5px;fill:#3c5b4b}
+      .step{font:700 19px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#153c2b}
+      .body{font:400 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#52645a}
+      .small{font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#52645a}
+      .white{fill:#fff}
+      .card{fill:#fff;stroke:#d8e3db;stroke-width:1.5;filter:url(#shadow)}
+      .connector{fill:none;stroke:#718078;stroke-width:2.5;marker-end:url(#arrow)}
+      .secure{fill:none;stroke:#16824a;stroke-width:3;marker-end:url(#arrow-green)}
+      .dashed{fill:none;stroke:#87948d;stroke-width:2;stroke-dasharray:7 7;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1440" height="1000" rx="24" fill="#f4f8f4"/>
+  <circle cx="1350" cy="80" r="180" fill="#e7f2e9"/>
+  <circle cx="35" cy="960" r="180" fill="#e8f1e9"/>
+  <text x="64" y="76" class="title">FreshAgro · from sensor to dashboard</text>
+  <text x="64" y="108" class="subtitle">A low-power ESP32-C3 sampling cycle with a durable cloud queue and read-only web dashboard</text>
+
+  <rect x="48" y="142" width="1344" height="335" rx="20" fill="#edf5ee" stroke="#d7e6d9"/>
+  <text x="76" y="178" class="lane">1 · ESP32-C3 DEVICE · 10-MINUTE START-TO-START CYCLE</text>
+
+  <!-- Device stages -->
+  <g>
+    <rect x="72" y="211" width="214" height="176" rx="16" class="card"/>
+    <circle cx="101" cy="242" r="15" fill="#16824a"/><text x="101" y="247" text-anchor="middle" class="small white">1</text>
+    <text x="96" y="282" class="step">Wake &amp; initialize</text>
+    <text x="96" y="313" class="body"><tspan x="96">Timer wake, start UART</tspan><tspan x="96" dy="22">and I²C, allow sensors</tspan><tspan x="96" dy="22">to settle for 2 seconds.</tspan></text>
+
+    <rect x="324" y="211" width="214" height="176" rx="16" class="card"/>
+    <circle cx="353" cy="242" r="15" fill="#16824a"/><text x="353" y="247" text-anchor="middle" class="small white">2</text>
+    <text x="348" y="282" class="step">Read 3 sensors</text>
+    <text x="348" y="313" class="body"><tspan x="348">O₂ · UART</tspan><tspan x="348" dy="22">CO₂ · UART</tspan><tspan x="348" dy="22">Temperature / RH · I²C</tspan></text>
+
+    <rect x="576" y="211" width="214" height="176" rx="16" class="card"/>
+    <circle cx="605" cy="242" r="15" fill="#16824a"/><text x="605" y="247" text-anchor="middle" class="small white">3</text>
+    <text x="600" y="282" class="step">Validate &amp; signal</text>
+    <text x="600" y="313" class="body"><tspan x="600">Health, range and CRC</tspan><tspan x="600" dy="22">checks; green = 3 valid,</tspan><tspan x="600" dy="22">orange = 1–2, red = 0.</tspan></text>
+
+    <rect x="828" y="211" width="214" height="176" rx="16" class="card"/>
+    <circle cx="857" cy="242" r="15" fill="#16824a"/><text x="857" y="247" text-anchor="middle" class="small white">4</text>
+    <text x="852" y="282" class="step">Queue the cycle</text>
+    <text x="852" y="313" class="body"><tspan x="852">Persist readings in NVS.</tspan><tspan x="852" dy="22">Keep pending samples</tspan><tspan x="852" dy="22">when the network is down.</tspan></text>
+
+    <rect x="1080" y="211" width="276" height="176" rx="16" fill="#e8f4eb" stroke="#add2b8" stroke-width="1.5" filter="url(#shadow)"/>
+    <circle cx="1109" cy="242" r="15" fill="#16824a"/><text x="1109" y="247" text-anchor="middle" class="small white">5</text>
+    <text x="1104" y="282" class="step">Secure upload</text>
+    <text x="1104" y="313" class="body"><tspan x="1104">Bounded Wi-Fi + verified</tspan><tspan x="1104" dy="22">HTTPS batch upload.</tspan><tspan x="1104" dy="22">LED confirms connection</tspan><tspan x="1104" dy="22">and server acknowledgement.</tspan></text>
+  </g>
+  <path d="M286 299 H316" class="connector"/><path d="M538 299 H568" class="connector"/><path d="M790 299 H820" class="connector"/><path d="M1042 299 H1072" class="secure"/>
+  <rect x="94" y="411" width="1252" height="42" rx="12" fill="#fff" stroke="#d8e3db"/>
+  <text x="720" y="438" text-anchor="middle" class="body">After the upload attempt: radio and LED off → deep sleep for the remaining interval → next timer wake</text>
+  <path d="M1218 388 V410" class="connector"/>
+
+  <!-- Cloud services -->
+  <rect x="48" y="505" width="1344" height="216" rx="20" fill="#eef4f9" stroke="#d8e4ee"/>
+  <text x="76" y="541" class="lane">2 · CLOUD STORAGE · DEVICE SLEEPS WHILE SERVICES REMAIN AVAILABLE</text>
+  <rect x="336" y="570" width="310" height="112" rx="16" class="card"/>
+  <text x="366" y="608" class="step">Supabase Edge Function</text>
+  <text x="366" y="638" class="body"><tspan x="366">Checks device token, validates</tspan><tspan x="366" dy="22">the batch, then writes server-side.</tspan></text>
+  <rect x="786" y="570" width="310" height="112" rx="16" class="card"/>
+  <text x="816" y="608" class="step">Postgres readings</text>
+  <text x="816" y="638" class="body"><tspan x="816">Stores valid and failed-sensor cycles;</tspan><tspan x="816" dy="22">stable IDs make retries idempotent.</tspan></text>
+  <path d="M1218 387 C1218 473 491 467 491 562" class="secure"/>
+  <path d="M646 626 H778" class="secure"/>
+  <path d="M786 650 C730 725 1285 720 1285 395" class="dashed"/>
+  <text x="1115" y="700" class="small">HTTP 200 acknowledgement clears queued batch</text>
+
+  <!-- Dashboard path -->
+  <rect x="48" y="749" width="1344" height="197" rx="20" fill="#fff" stroke="#d8e3db"/>
+  <text x="76" y="785" class="lane">3 · PUBLIC READ-ONLY DASHBOARD</text>
+  <rect x="214" y="813" width="260" height="96" rx="15" class="card"/>
+  <text x="244" y="851" class="step">Read-only query</text>
+  <text x="244" y="878" class="body">Public SELECT policy</text>
+  <rect x="590" y="813" width="260" height="96" rx="15" class="card"/>
+  <text x="620" y="851" class="step">Vercel dashboard</text>
+  <text x="620" y="878" class="body">Latest values · history · CSV</text>
+  <rect x="966" y="813" width="260" height="96" rx="15" class="card"/>
+  <text x="996" y="851" class="step">Browser</text>
+  <text x="996" y="878" class="body">Works while ESP32 sleeps</text>
+  <path d="M941 683 C941 740 344 734 344 805" class="connector"/>
+  <path d="M474 861 H582" class="connector"/>
+  <path d="M850 861 H958" class="connector"/>
+  <text x="64" y="974" class="small">The 72-cycle queue survives outages. External sensors stay powered; deep sleep reduces ESP32 activity but does not switch sensor power.</text>
+</svg>
