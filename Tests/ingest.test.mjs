@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+const token='a'.repeat(48), env=new Map([['DEVICE_TOKEN_SHA256',createHash('sha256').update(token).digest('hex')],['DEVICE_ID','freshagro-01'],['SUPABASE_URL','https://example.supabase.co'],['SUPABASE_SERVICE_ROLE_KEY','test-server-secret']]);
+let handler, calls=[], storageStatus=201;
+globalThis.Deno={env:{get:k=>env.get(k)},serve:fn=>handler=fn};
+globalThis.fetch=async(url,options)=>{calls.push({url,options});return new Response(null,{status:storageStatus});};
+await import('../supabase/functions/ingest/index.ts');
+const sample={sample_id:'1234567890abcdef',sampled_at:null,o2_valid:false,co2_valid:false,sht_valid:false,oxygen:null,co2:null,temperature:null,humidity:null,firmware:'cloud-1.0'};
+const request=(body,secret=token)=>new Request('https://test/ingest',{method:'POST',headers:{'x-device-token':secret},body:JSON.stringify(body)});
+test('rejects unauthenticated requests before database access',async()=>{calls=[];assert.equal((await handler(request({samples:[sample]},'b'.repeat(48)))).status,401);assert.equal(calls.length,0);});
+test('rejects invalid authenticated payload before database access',async()=>{calls=[];assert.equal((await handler(request({samples:[{...sample,oxygen:0}]}))).status,400);assert.equal(calls.length,0);});
+test('acknowledges only successful atomic insert and requests duplicate-safe insertion',async()=>{calls=[];storageStatus=201;const r=await handler(request({samples:[sample]}));assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,accepted:1});assert.match(calls[0].options.headers.Prefer,/ignore-duplicates/);assert.equal(JSON.parse(calls[0].options.body)[0].device_id,'freshagro-01');storageStatus=503;assert.equal((await handler(request({samples:[sample]}))).status,503);});
+test('rejects oversized streams even without Content-Length',async()=>{const r=await handler(new Request('https://test/ingest',{method:'POST',headers:{'x-device-token':token},body:'x'.repeat(40001)}));assert.equal(r.status,413);});
+test('rejects methods and fails closed on missing configuration',async()=>{assert.equal((await handler(new Request('https://test/ingest'))).status,405);env.delete('DEVICE_TOKEN_SHA256');assert.equal((await handler(request({samples:[sample]}))).status,503);});

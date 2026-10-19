@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {validateBatch} from '../supabase/functions/ingest/validation.mjs';
+const base=()=>({sample_id:'1234567890abcdef',sampled_at:null,o2_valid:true,co2_valid:true,sht_valid:true,oxygen:19.9,co2:850,temperature:23.1,humidity:80,firmware:'cloud-1.0'});
+const batch=s=>({samples:[s]});
+test('assigns server device identity; preserves valid measurements',()=>{const s=base();s.device_id='spoof';const r=validateBatch(batch(s),'trusted')[0];assert.equal(r.device_id,'trusted');assert.equal(r.co2,850);assert.equal(r.sampled_at,null);});
+test('accepts failed sensors only as explicit null values',()=>{const s=base();s.o2_valid=false;s.oxygen=null;assert.equal(validateBatch(batch(s),'device')[0].oxygen,null);s.oxygen=0;assert.throws(()=>validateBatch(batch(s),'device'));});
+test('rejects missing, nonfinite, out-of-range and fractional ppm',()=>{for(const [k,v]of [['oxygen',null],['oxygen',26],['co2',3.5],['temperature',Infinity],['humidity',101],['co2',-1]]){assert.throws(()=>validateBatch(batch({...base(),[k]:v}),'device'));}});
+test('requires boolean validity, stable IDs, firmware and sane timestamps',()=>{for(const patch of [{o2_valid:1},{sample_id:'bad'},{sampled_at:9999999999},{firmware:'<script>'}])assert.throws(()=>validateBatch(batch({...base(),...patch}),'device'));});
+test('bounds batches and rejects duplicate IDs within the batch',()=>{assert.throws(()=>validateBatch({samples:[]},'device'));assert.throws(()=>validateBatch({samples:Array(73).fill(base())},'device'));assert.throws(()=>validateBatch({samples:[base(),base()]},'device'));});
+test('accepts all-failed cycles and converts valid epoch to timestamp',()=>{const s={...base(),o2_valid:false,co2_valid:false,sht_valid:false,oxygen:null,co2:null,temperature:null,humidity:null,sampled_at:1735689600};assert.equal(validateBatch(batch(s),'device')[0].sampled_at,'2025-01-01T00:00:00.000Z');});
