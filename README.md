@@ -27,6 +27,10 @@ Copy `Arduino/FreshAgro_Cloud/config.local.example.h` to `config.local.h` in the
 
 The sketch can use WPA2-Personal or WPA2-Enterprise; institution-specific EAP settings and certificates belong only in your private local configuration. Verify those settings before relying on eduroam.
 
+## Offline queue
+
+The cloud firmware keeps a CRC-checked, fixed-slot queue in the existing SPIFFS partition, with small progress metadata in NVS. At the default 10-minute cycle it holds **2,016 readings (14 days)**; capacity scales to the configured interval, up to 20,160 records at one minute. The current 72-reading NVS queue is migrated on first boot, and its old copy remains until the flash records and metadata are saved. Uploads contain at most 72 samples and send up to four batches per wake. Server HTTP 200 advances the saved queue cursor; unacknowledged records are retried with stable IDs. If the 14-day window fills, the oldest unacknowledged samples expire. The queue firmware is compiled but needs a hardware upload and offline-recovery test.
+
 ## Supabase deployment
 
 The deployed project is `ucqfewqkwvmfitkibcvh`. The migration in `Supabase/migrations/001_readings.sql` creates the telemetry table with public read-only access. The Edge Function verifies the device token and writes with the server-only service-role key. Keep the service-role key in Supabase secrets only. Deployment notes and a combined function source are in `Supabase/ingest-deploy.ts`.
@@ -35,4 +39,4 @@ The deployed project is `ucqfewqkwvmfitkibcvh`. The migration in `Supabase/migra
 
 Run the available tests with `node --test Tests/*.test.mjs`. The dashboard is deployed and the project records document a successful HTTPS batch upload and HTTP 200 acknowledgement from the ESP32 over the temporary Pie hotspot, with ten genuine samples visible in Supabase. The 10-minute battery-input current and a sustained unattended sleep/wake cycle have not been measured/verified.
 
-The Arduino cloud sketch is the one recorded as uploaded through Arduino IDE with its flash hash checked. The source and required sketch headers are included here. No private local configuration or compiled firmware binary is included; recreate local settings from the example before uploading.
+The previous cloud sketch is recorded as uploaded through Arduino IDE with its flash hash checked. The new 14-day queue revision compiles for ESP32-C3 but has not yet been uploaded or physically tested. The source and required sketch headers are included here. No private local configuration or compiled firmware binary is included; recreate local settings from the example before uploading.
