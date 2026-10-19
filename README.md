@@ -4,19 +4,15 @@ This folder collects the deployable FreshAgro source in one place. The latest cl
 
 ## Project flow
 
-The ESP32 wakes on its timer, samples and validates the three sensors, stores the cycle in its persistent queue, then attempts a bounded secure upload. It returns to deep sleep for the remainder of the ten-minute start-to-start interval. The hosted dashboard reads stored history independently of the device.
+![FreshAgro sensor-to-dashboard flow chart](docs/PROJECT_FLOW.svg)
 
-See the full [project flow chart](docs/PROJECT_FLOW.md).
+[Open the flow chart notes](docs/PROJECT_FLOW.md).
 
 ## Hardware photos
 
-Sensor and controller side of the prototype:
-
-![FreshAgro sensor and ESP32-C3 assembly](docs/hardware/hardware-sensor-side.jpeg)
-
-Battery and reverse side of the prototype:
-
-![FreshAgro battery pack and board reverse side](docs/hardware/hardware-battery-side.jpeg)
+| Sensor and controller side | Battery and reverse side |
+|:--:|:--:|
+| ![FreshAgro sensor and ESP32-C3 assembly](docs/hardware/hardware-sensor-side.jpeg) | ![FreshAgro battery pack and board reverse side](docs/hardware/hardware-battery-side.jpeg) |
 
 ## Project parts
 
