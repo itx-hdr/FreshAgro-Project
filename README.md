@@ -2,6 +2,22 @@
 
 This folder collects the deployable FreshAgro source in one place. The latest cloud firmware identified in the project’s upload and serial-test records is `Arduino/FreshAgro_Cloud/FreshAgro_Cloud.ino`. It is the ten-minute wake/read/upload/deep-sleep sketch with three LED status checks. Its matching headers are beside it. The separately preserved `Arduino/Hardware_Validated/FreshAgro.ino` is the known hardware-only rollback sketch with two-minute readings.
 
+## Project flow
+
+The ESP32 wakes on its timer, samples and validates the three sensors, stores the cycle in its persistent queue, then attempts a bounded secure upload. It returns to deep sleep for the remainder of the ten-minute start-to-start interval. The hosted dashboard reads stored history independently of the device.
+
+See the full [project flow chart](docs/PROJECT_FLOW.md).
+
+## Hardware photos
+
+Sensor and controller side of the prototype:
+
+![FreshAgro sensor and ESP32-C3 assembly](docs/hardware/hardware-sensor-side.jpeg)
+
+Battery and reverse side of the prototype:
+
+![FreshAgro battery pack and board reverse side](docs/hardware/hardware-battery-side.jpeg)
+
 ## Project parts
 
 - `Arduino/FreshAgro_Cloud/`: cloud-connected ESP32-C3 firmware. Open the `.ino` in Arduino IDE with ESP32-C3 Dev Module and USB CDC On Boot enabled. Set `readingCycleMinutes` near the top of the sketch to change the interval.
