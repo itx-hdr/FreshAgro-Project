@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1000" viewBox="0 0 1440 1000" role="img" aria-labelledby="title desc">
   <title id="title">FreshAgro project flow</title>
-  <desc id="desc">ESP32-C3 wakes every ten minutes, validates three sensors, records sensor status and queues a sample, then securely uploads a batch to Supabase. Supabase stores and deduplicates readings. The Vercel dashboard reads the stored history.</desc>
+  <desc id="desc">ESP32-C3 wakes every ten minutes, validates three sensors, records sensor status in a CRC-checked 14-day flash ring, then securely uploads batches to Supabase. Supabase stores and deduplicates readings. The Vercel dashboard reads the stored history.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 z" fill="#718078"/></marker>
     <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 z" fill="#16824a"/></marker>
@@ -48,7 +48,7 @@
     <rect x="828" y="211" width="214" height="176" rx="16" class="card"/>
     <circle cx="857" cy="242" r="15" fill="#16824a"/><text x="857" y="247" text-anchor="middle" class="small white">4</text>
     <text x="852" y="282" class="step">Queue the cycle</text>
-    <text x="852" y="313" class="body"><tspan x="852">Persist readings in NVS.</tspan><tspan x="852" dy="22">Keep pending samples</tspan><tspan x="852" dy="22">when the network is down.</tspan></text>
+    <text x="852" y="313" class="body"><tspan x="852">Append CRC-checked flash</tspan><tspan x="852" dy="22">ring record. Preserve up to</tspan><tspan x="852" dy="22">14 days when offline.</tspan></text>
 
     <rect x="1080" y="211" width="276" height="176" rx="16" fill="#e8f4eb" stroke="#add2b8" stroke-width="1.5" filter="url(#shadow)"/>
     <circle cx="1109" cy="242" r="15" fill="#16824a"/><text x="1109" y="247" text-anchor="middle" class="small white">5</text>
@@ -89,5 +89,5 @@
   <path d="M941 683 C941 740 344 734 344 805" class="connector"/>
   <path d="M474 861 H582" class="connector"/>
   <path d="M850 861 H958" class="connector"/>
-  <text x="64" y="974" class="small">The 72-cycle queue survives outages. External sensors stay powered; deep sleep reduces ESP32 activity but does not switch sensor power.</text>
+  <text x="64" y="974" class="small">At 10-minute sampling, the flash ring retains 2,016 cycles (14 days); uploads are acknowledged in batches. External sensors stay powered during ESP32 deep sleep.</text>
 </svg>
