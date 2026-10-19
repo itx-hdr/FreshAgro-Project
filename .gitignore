@@ -1,0 +1,14 @@
+# Local secrets
+**/config.local.h
+**/.env
+**/.env.*
+!**/*.example
+# IDE/deployment state and generated output
+**/.vercel/
+**/node_modules/
+**/build/
+**/*.bin
+**/*.elf
+**/*.map
+**/*device-log*
+.DS_Store
