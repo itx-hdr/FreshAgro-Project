@@ -225,6 +225,7 @@ bool storageReady = false;
 bool fileSystemReady = false;
 bool internetReached = false;
 bool dataStored = false;
+const char *lastNetworkAttempt = "none";
 volatile uint16_t lastDisconnectReason = 0;
 RTC_DATA_ATTR volatile bool clockTrusted = false;
 constexpr time_t BUILD_TIME_FLOOR = 1792354288; // Bootstrap EAP cert dates only, never sample time.
@@ -537,14 +538,18 @@ String sampleJSON(const Sample &s) {
 }
 
 bool configured() {
-  bool networkReady = strlen(WIFI_SSID);
-#if WIFI_ENTERPRISE
-  networkReady = networkReady && strlen(EAP_USERNAME) && strlen(EAP_PASSWORD) &&
-                 strlen(EAP_CA) && strlen(EAP_SERVER_DOMAIN);
-#endif
-  return networkReady && strlen(DEVICE_TOKEN) >= 32 && strlen(ROOT_CA) &&
+  return strlen(DEVICE_TOKEN) >= 32 && strlen(ROOT_CA) &&
          String(INGEST_URL).startsWith("https://");
 }
+
+bool primaryNamed() { return strlen(ENTERPRISE_SSID); }
+
+bool enterpriseConfigured() {
+  return primaryNamed() && strlen(EAP_USERNAME) && strlen(EAP_PASSWORD) &&
+         strlen(EAP_CA) && strlen(EAP_SERVER_DOMAIN);
+}
+
+bool backupConfigured() { return strlen(WIFI_SSID) && strlen(WIFI_PASSWORD); }
 
 bool eapChecked(const char *stage, esp_err_t result) {
   // Log only operation/result, never identities, passwords or certificate contents.
@@ -552,31 +557,21 @@ bool eapChecked(const char *stage, esp_err_t result) {
   return result == ESP_OK;
 }
 
-void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
-  if (!configured()) { Serial.println("Cloud not configured; queued locally, radio remains off."); return; }
-  if (!pendingCount()) { Serial.println("No pending queue records to upload."); return; }
-  const uint32_t started = millis();
-  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-    if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
-      Serial.printf("Wi-Fi associated at %lu ms; awaiting IP address.\n", millis());
-    } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-      Serial.printf("Wi-Fi obtained IP at %lu ms.\n", millis());
-    }
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-      lastDisconnectReason = info.wifi_sta_disconnected.reason;
-      Serial.printf("Wi-Fi disconnected, reason=%u\n", unsigned(lastDisconnectReason));
-    }
-  });
-  WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(false);
-#if WIFI_ENTERPRISE
+bool connectEnterprise(bool &eapEnabled) {
+  lastDisconnectReason = 0;
+  // A directed scan avoids a full enterprise timeout when the SSID is absent.
+  int found = WiFi.scanNetworks(false, false, false, 120, 0, ENTERPRISE_SSID);
+  Serial.printf("Primary SSID scan: %d access points\n", found);
   if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
-    // Manual-start diagnostic only: regular battery cycles do not add a scan.
-    int found = WiFi.scanNetworks(false, false, false, 120, 0, WIFI_SSID);
-    Serial.printf("Configured SSID scan: %d access points\n", found);
     for (int i = 0; i < found; ++i) {
       Serial.printf("  AP channel=%ld RSSI=%ld auth=%d\n", long(WiFi.channel(i)), long(WiFi.RSSI(i)), int(WiFi.encryptionType(i)));
     }
-    WiFi.scanDelete();
+  }
+  WiFi.scanDelete();
+  if (found == 0) { Serial.println("eduroam not visible; trying backup Wi-Fi."); return false; }
+  if (!enterpriseConfigured()) {
+    Serial.println("eduroam profile incomplete; trusted CA bundle, server domain and credentials are required.");
+    return false;
   }
   // Verify server identity before releasing inner credentials. No CA-free fallback.
   if (time(nullptr) < BUILD_TIME_FLOOR) {
@@ -588,19 +583,41 @@ void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
   if (!eapChecked("PEAP method", esp_eap_client_set_eap_methods(ESP_EAP_TYPE_PEAP)) ||
       !eapChecked("server domain", esp_eap_client_set_domain_name(EAP_SERVER_DOMAIN)) ||
       !eapChecked("certificate dates", esp_eap_client_set_disable_time_check(false)) ||
-      !eapChecked("CA", esp_eap_client_set_ca_cert(reinterpret_cast<const unsigned char *>(EAP_CA), strlen(EAP_CA))) ||
+      !eapChecked("trusted CA bundle", esp_eap_client_set_ca_cert(
+          reinterpret_cast<const unsigned char *>(EAP_CA), strlen(EAP_CA))) ||
       !eapChecked("identity", esp_eap_client_set_identity(reinterpret_cast<const unsigned char *>(outerIdentity), strlen(outerIdentity))) ||
       !eapChecked("username", esp_eap_client_set_username(reinterpret_cast<const unsigned char *>(EAP_USERNAME), strlen(EAP_USERNAME))) ||
       !eapChecked("password", esp_eap_client_set_password(reinterpret_cast<const unsigned char *>(EAP_PASSWORD), strlen(EAP_PASSWORD))) ||
-      !eapChecked("enable", esp_wifi_sta_enterprise_enable())) return;
-  Serial.println("Joining enterprise Wi-Fi; PEAP only, CA/domain/date checks enabled.");
-  WiFi.begin(WIFI_SSID);
-#else
+      !eapChecked("enable", esp_wifi_sta_enterprise_enable())) return false;
+  eapEnabled = true;
+  Serial.println("Searching for eduroam; PEAP with trusted CA bundle/domain/date checks enabled.");
+  WiFi.begin(ENTERPRISE_SSID);
+  const uint32_t connectStarted = millis();
+  while (WiFi.status() != WL_CONNECTED && uint32_t(millis() - connectStarted) < WIFI_CONNECT_MS) delay(50);
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("eduroam timeout status=%d reason=%u.\n", int(WiFi.status()), unsigned(lastDisconnectReason));
+    return false;
+  }
+  Serial.printf("eduroam connected; RSSI=%d.\n", WiFi.RSSI());
+  return true;
+}
+
+bool connectBackup() {
+  lastDisconnectReason = 0;
+  Serial.println("Searching for backup Wi-Fi (Pie on this board).");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-#endif
-  while (WiFi.status() != WL_CONNECTED && uint32_t(millis() - started) < WIFI_CONNECT_MS) delay(50);
-  if (WiFi.status() != WL_CONNECTED) { Serial.printf("Wi-Fi timeout status=%d reason=%u; queue retained.\n", int(WiFi.status()), unsigned(lastDisconnectReason)); return; }
-  Serial.printf("Wi-Fi connected; RSSI=%d.\n", WiFi.RSSI());
+  const uint32_t connectStarted = millis();
+  while (WiFi.status() != WL_CONNECTED && uint32_t(millis() - connectStarted) < WIFI_CONNECT_MS) delay(50);
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("Backup Wi-Fi timeout status=%d reason=%u; queue retained.\n",
+                  int(WiFi.status()), unsigned(lastDisconnectReason));
+    return false;
+  }
+  Serial.printf("Backup Wi-Fi connected; RSSI=%d.\n", WiFi.RSSI());
+  return true;
+}
+
+void uploadConnectedQueue(uint32_t started, uint32_t captureMillis, bool currentSampleSaved) {
   // TLS requires a valid clock. The RTC clock normally survives timer deep sleep.
   sntp_set_time_sync_notification_cb(clockSynced);
   configTime(0, 0, "time.google.com", "time.cloudflare.com", "pool.ntp.org");
@@ -658,6 +675,43 @@ void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
   }
 }
 
+void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
+  if (!configured()) { Serial.println("Cloud not configured; queued locally, radio remains off."); return; }
+  if (!pendingCount()) { Serial.println("No pending queue records to upload."); return; }
+  if (!primaryNamed() && !backupConfigured()) {
+    Serial.println("No configured Wi-Fi network; queued locally, radio remains off.");
+    return;
+  }
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+      Serial.printf("Wi-Fi associated at %lu ms; awaiting IP address.\n", millis());
+    } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+      Serial.printf("Wi-Fi obtained IP at %lu ms.\n", millis());
+    } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      lastDisconnectReason = info.wifi_sta_disconnected.reason;
+      Serial.printf("Wi-Fi disconnected, reason=%u\n", unsigned(lastDisconnectReason));
+    }
+  });
+  WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(false);
+  bool eapEnabled = false;
+  if (primaryNamed()) {
+    lastNetworkAttempt = "eduroam";
+    const uint32_t started = millis();
+    if (connectEnterprise(eapEnabled)) uploadConnectedQueue(started, captureMillis, currentSampleSaved);
+    // A successful batch keeps eduroam as the network for this wake.
+    if (dataStored) return;
+  }
+  if (!backupConfigured()) return;
+  if (primaryNamed()) Serial.println("eduroam did not store data; trying backup Wi-Fi.");
+  WiFi.disconnect(false);
+  if (eapEnabled && !eapChecked("disable before backup", esp_wifi_sta_enterprise_disable())) return;
+  WiFi.mode(WIFI_OFF); delay(50); WiFi.mode(WIFI_STA);
+  internetReached = false; dataStored = false;
+  lastNetworkAttempt = "backup Wi-Fi";
+  const uint32_t started = millis();
+  if (connectBackup()) uploadConnectedQueue(started, captureMillis, currentSampleSaved);
+}
+
 void setup() {
   const int64_t cycleStart = esp_timer_get_time();
   if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) clockTrusted = false;
@@ -684,6 +738,7 @@ void setup() {
   uploadQueue(captureMillis, currentSampleSaved);
   WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
   // Show results with the radio already off to minimize energy use.
+  Serial.printf("Final two LED checks reflect %s.\n", lastNetworkAttempt);
   indicateCheck("2 internet/cloud reachability", internetReached, 1000);
   indicateCheck("3 data stored", dataStored, 500);
   Wire.end(); oxygenPort.end(); co2Port.end();

@@ -4,15 +4,15 @@ This folder collects the deployable FreshAgro source in one place. The latest cl
 
 ## Project flow
 
-![FreshAgro sensor-to-dashboard flow chart](Docs/PROJECT_FLOW.svg)
+![FreshAgro sensor-to-dashboard flow chart](docs/PROJECT_FLOW.svg)
 
-[Open the flow chart notes](Docs/PROJECT_FLOW.md).
+[Open the flow chart notes](docs/PROJECT_FLOW.md).
 
 ## Hardware photos
 
 | Sensor and controller side | Battery and reverse side |
 |:--:|:--:|
-| ![FreshAgro sensor and ESP32-C3 assembly](Docs/hardware/hardware-sensor-side.jpeg) | ![FreshAgro battery pack and board reverse side](Docs/hardware/hardware-battery-side.jpeg) |
+| ![FreshAgro sensor and ESP32-C3 assembly](docs/hardware/hardware-sensor-side.jpeg) | ![FreshAgro battery pack and board reverse side](docs/hardware/hardware-battery-side.jpeg) |
 
 ## Project parts
 
@@ -25,7 +25,7 @@ This folder collects the deployable FreshAgro source in one place. The latest cl
 
 Copy `Arduino/FreshAgro_Cloud/config.local.example.h` to `config.local.h` in the same sketch directory and fill in your Wi-Fi, ingestion URL, device token, and verified TLS root certificate locally. The raw device token must match the SHA-256 token hash configured as the Supabase Edge Function secret. Do not commit `config.local.h`, Wi-Fi credentials, EAP credentials, device tokens, or service-role keys. `config.h` uses empty safe defaults when the local file is absent.
 
-The sketch can use WPA2-Personal or WPA2-Enterprise; institution-specific EAP settings and certificates belong only in your private local configuration. Verify those settings before relying on eduroam.
+The sketch scans for eduroam first and authenticates with PEAP when the username, password, server domain, and trusted EAP CA certificate are configured. If NUST supplies no separate CA file, `EAP_CA` can contain PEM certificates exported from a trusted system root store. Keep the `nust.edu.pk` server-domain check enabled. If eduroam is absent, its profile is incomplete, or its connection cannot store a reading, the sketch disconnects, disables enterprise authentication, and tries the configured 2.4 GHz WPA2-Personal backup network (Pie on the tested board). A successful eduroam upload skips Pie. The sensor LED check runs first; the final two LED checks report internet reachability and data storage for the network used on that wake, or for Pie if fallback was attempted. Credentials belong only in the private local configuration.
 
 ## Offline queue
 
@@ -39,4 +39,4 @@ The deployed project is `ucqfewqkwvmfitkibcvh`. The migration in `Supabase/migra
 
 Run the available tests with `node --test Tests/*.test.mjs`. The dashboard is deployed. On 2026-11-20, the ESP32-C3 connected through the 2.4 GHz Pie hotspot, uploaded its saved backlog to Supabase, migrated to the compact ring, and acknowledged a newly captured reading with zero pending records. Supabase contained 1,062 readings after that check. One incomplete old flash record could not be recovered; its raw bytes remain in the private flash backup. The 10-minute battery-input current and a sustained unattended sleep/wake cycle have not been measured/verified.
 
-The board was flashed with the clean cloud firmware and tested through a physical reset. The source and required sketch headers are included here. No private local configuration or compiled firmware binary is included; recreate local settings from the example before uploading.
+The board was flashed with the eduroam-first cloud firmware and tested through a physical reset on 2026-11-20. Its PEAP settings and trusted-root setup succeeded, but eduroam did not obtain an IP address within the connection timeout. The board then disabled enterprise mode, connected to Pie, uploaded one new reading (acknowledged through queue order 1009), finished with zero pending records, and showed green for both final LED checks. Successful eduroam upload remains unverified. The source and required sketch headers are included here. No private local configuration or compiled firmware binary is included; recreate local settings from the example before uploading.
