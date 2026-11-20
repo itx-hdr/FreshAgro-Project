@@ -233,6 +233,9 @@ void clockSynced(struct timeval *) { clockTrusted = true; }
 constexpr char QUEUE_FILE[] = "/freshagro-ring.bin";
 constexpr uint32_t DISK_RING_SLOTS = MAX_STORAGE_RECORDS + UPLOAD_BATCH_SIZE;
 constexpr uint32_t QUEUE_FILE_BYTES = DISK_RING_SLOTS * sizeof(DiskSample);
+constexpr uint32_t PREVIOUS_RING_SLOTS = OFFLINE_RETENTION_DAYS * 24UL * 60UL + UPLOAD_BATCH_SIZE;
+constexpr uint32_t PREVIOUS_QUEUE_FILE_BYTES = PREVIOUS_RING_SLOTS * sizeof(DiskSample);
+uint32_t activeRingSlots = DISK_RING_SLOTS;
 
 uint32_t crc32(const uint8_t *bytes, size_t length) {
   uint32_t crc = 0xFFFFFFFF;
@@ -245,7 +248,8 @@ uint32_t crc32(const uint8_t *bytes, size_t length) {
 
 uint32_t queueCapacity() {
   const uint32_t minutes = readingCycleMinutes < 1 ? 1 : readingCycleMinutes;
-  return min<uint32_t>(MAX_STORAGE_RECORDS, OFFLINE_RETENTION_DAYS * 24UL * 60UL / minutes);
+  return min<uint32_t>(activeRingSlots - UPLOAD_BATCH_SIZE,
+                       OFFLINE_RETENTION_DAYS * 24UL * 60UL / minutes);
 }
 
 uint64_t pendingFirstOrder() { return max(queue.firstOrder, queue.ackedOrder + 1); }
@@ -273,7 +277,8 @@ bool saveQueue() {
 bool ensureQueueFile() {
   if (SPIFFS.exists(QUEUE_FILE)) {
     File existing = SPIFFS.open(QUEUE_FILE, "r");
-    if (existing && existing.size() == QUEUE_FILE_BYTES) { existing.close(); return true; }
+    const uint32_t expectedBytes = activeRingSlots * sizeof(DiskSample);
+    if (existing && existing.size() == expectedBytes) { existing.close(); return true; }
     if (existing) existing.close();
     // A size mismatch is treated as a storage-format error; do not erase queued data.
     return false;
@@ -295,10 +300,41 @@ bool ensureQueueFile() {
   return complete;
 }
 
+bool migratePreviousRing() {
+  if (!SPIFFS.exists(QUEUE_FILE)) return true;
+  File previous = SPIFFS.open(QUEUE_FILE, "r");
+  if (!previous) return false;
+  const size_t fileBytes = previous.size();
+  previous.close();
+  if (fileBytes == QUEUE_FILE_BYTES) return true;
+  if (fileBytes != PREVIOUS_QUEUE_FILE_BYTES) return false;
+
+  Queue saved{};
+  if (prefs.getBytesLength("qmeta") != sizeof(saved) ||
+      prefs.getBytes("qmeta", &saved, sizeof(saved)) != sizeof(saved) ||
+      saved.magic != QUEUE_META_MAGIC || saved.firstOrder < 1 ||
+      saved.nextOrder < saved.firstOrder || saved.ackedOrder >= saved.nextOrder) {
+    Serial.println("Previous queue metadata invalid; old ring preserved.");
+    return false;
+  }
+  queue = saved;
+  if (pendingCount()) {
+    activeRingSlots = PREVIOUS_RING_SLOTS;
+    Serial.printf("Previous queue has %u pending; using the old ring until it drains.\n", pendingCount());
+    return true;
+  }
+  if (!SPIFFS.remove(QUEUE_FILE)) {
+    Serial.println("Could not retire previous ring; old ring preserved.");
+    return false;
+  }
+  Serial.println("Previous fully acknowledged ring retired; initializing compact ring.");
+  return true;
+}
+
 bool readDiskSample(uint64_t order, Sample &sample) {
   if (!fileSystemReady || order == 0) return false;
   File file = SPIFFS.open(QUEUE_FILE, "r");
-  if (!file || !file.seek((order % DISK_RING_SLOTS) * sizeof(DiskSample), SeekSet)) return false;
+  if (!file || !file.seek((order % activeRingSlots) * sizeof(DiskSample), SeekSet)) return false;
   DiskSample record{};
   bool readOK = file.read(reinterpret_cast<uint8_t *>(&record), sizeof(record)) == sizeof(record);
   file.close();
@@ -309,19 +345,42 @@ bool readDiskSample(uint64_t order, Sample &sample) {
 }
 
 bool writeDiskSample(uint64_t order, const Sample &sample) {
-  if (!fileSystemReady || order == 0) return false;
+  if (!fileSystemReady || order == 0) {
+    Serial.printf("Flash queue write unavailable at order %llu (filesystem=%u).\n",
+                  (unsigned long long)order, unsigned(fileSystemReady));
+    return false;
+  }
   DiskSample record{};
   record.order = order; record.id = sample.id; record.capturedAt = sample.capturedAt;
   record.oxygen = sample.oxygen; record.temperature = sample.temperature; record.humidity = sample.humidity;
   record.co2 = sample.co2; record.valid = sample.valid;
   record.crc = crc32(reinterpret_cast<const uint8_t *>(&record), offsetof(DiskSample, crc));
   File file = SPIFFS.open(QUEUE_FILE, "r+");
-  if (!file || !file.seek((order % DISK_RING_SLOTS) * sizeof(DiskSample), SeekSet)) return false;
-  bool writeOK = file.write(reinterpret_cast<const uint8_t *>(&record), sizeof(record)) == sizeof(record);
+  if (!file) {
+    Serial.printf("Flash queue open failed at order %llu (used=%u total=%u).\n",
+                  (unsigned long long)order, unsigned(SPIFFS.usedBytes()), unsigned(SPIFFS.totalBytes()));
+    return false;
+  }
+  if (!file.seek((order % activeRingSlots) * sizeof(DiskSample), SeekSet)) {
+    Serial.printf("Flash queue seek failed at order %llu.\n", (unsigned long long)order);
+    file.close();
+    return false;
+  }
+  const size_t written = file.write(reinterpret_cast<const uint8_t *>(&record), sizeof(record));
   file.flush(); file.close();
-  if (!writeOK) return false;
+  if (written != sizeof(record)) {
+    Serial.printf("Flash queue short write at order %llu: %u/%u bytes (used=%u total=%u).\n",
+                  (unsigned long long)order, unsigned(written), unsigned(sizeof(record)),
+                  unsigned(SPIFFS.usedBytes()), unsigned(SPIFFS.totalBytes()));
+    return false;
+  }
   Sample check{};
-  return readDiskSample(order, check) && check.id == sample.id;
+  if (!readDiskSample(order, check) || check.id != sample.id) {
+    Serial.printf("Flash queue readback failed at order %llu; backlog retained.\n",
+                  (unsigned long long)order);
+    return false;
+  }
+  return true;
 }
 
 bool readLegacyQueue(LegacyQueue &legacy) {
@@ -331,7 +390,7 @@ bool readLegacyQueue(LegacyQueue &legacy) {
            legacy.magic == 0xFA670005 && legacy.count <= LEGACY_QUEUE_CAPACITY;
   }
   if (bytes == sizeof(OlderLegacyQueue)) {
-    OlderLegacyQueue older{};
+    static OlderLegacyQueue older{};
     if (prefs.getBytes("queue", &older, sizeof(older)) != sizeof(older) ||
         older.magic != 0xFA670004 || older.count > LEGACY_QUEUE_CAPACITY) return false;
     legacy.magic = 0xFA670005; legacy.count = older.count; legacy.dropped = older.dropped; legacy.nextId = older.nextId;
@@ -360,7 +419,8 @@ void loadQueue() {
     fileSystemReady = SPIFFS.begin(true, "/spiffs", 10, "spiffs");
   }
   if (!fileSystemReady) { Serial.println("SPIFFS mount failed; no automatic format because saved data may exist."); return; }
-  if (!fsInitialized && SPIFFS.exists(QUEUE_FILE)) {
+  if (!migratePreviousRing()) { Serial.println("Queue migration stopped; saved data preserved."); fileSystemReady = false; return; }
+  if (!fsInitialized && !prefs.getBytesLength("qmeta") && SPIFFS.exists(QUEUE_FILE)) {
     File partial = SPIFFS.open(QUEUE_FILE, "r");
     bool incomplete = !partial || partial.size() != QUEUE_FILE_BYTES;
     if (partial) partial.close();
@@ -399,7 +459,7 @@ void loadQueue() {
   }
 
   // One-time migration preserves the existing NVS queue before removing it.
-  LegacyQueue legacy{};
+  static LegacyQueue legacy{};
   if (readLegacyQueue(legacy)) {
     queue.dropped = legacy.dropped; queue.nextId = legacy.nextId;
     for (size_t i = 0; i < legacy.count; ++i) {
@@ -492,7 +552,7 @@ bool eapChecked(const char *stage, esp_err_t result) {
   return result == ESP_OK;
 }
 
-void uploadQueue(uint32_t captureMillis) {
+void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
   if (!configured()) { Serial.println("Cloud not configured; queued locally, radio remains off."); return; }
   if (!pendingCount()) { Serial.println("No pending queue records to upload."); return; }
   const uint32_t started = millis();
@@ -557,7 +617,7 @@ void uploadQueue(uint32_t captureMillis) {
        uint32_t(millis() - started) < NETWORK_BUDGET_MS; ++batchNo) {
     const uint64_t batchStart = pendingFirstOrder();
     const uint8_t count = min<uint32_t>(pendingCount(), UPLOAD_BATCH_SIZE);
-    Sample batch[UPLOAD_BATCH_SIZE];
+    static Sample batch[UPLOAD_BATCH_SIZE];
     bool batchOK = true;
     for (uint8_t i = 0; i < count; ++i) {
       if (!readDiskSample(batchStart + i, batch[i])) { batchOK = false; break; }
@@ -566,7 +626,8 @@ void uploadQueue(uint32_t captureMillis) {
 
     // Only the current cycle can be accurately backdated after initial SNTP sync.
     const uint64_t latestOrder = queue.nextOrder - 1;
-    if (time(nullptr) >= 1704067200 && batchStart + count - 1 == latestOrder && !batch[count - 1].capturedAt) {
+    if (currentSampleSaved && time(nullptr) >= 1704067200 &&
+        batchStart + count - 1 == latestOrder && !batch[count - 1].capturedAt) {
       batch[count - 1].capturedAt = time(nullptr) - uint32_t(millis() - captureMillis) / 1000;
       if (!writeDiskSample(latestOrder, batch[count - 1])) { Serial.println("Timestamp persistence failed; retaining queue."); return; }
     }
@@ -616,8 +677,11 @@ void setup() {
   delay(SENSOR_SETTLE_MS);
   uint32_t captureMillis = millis();
   Sample sample = captureSample();
-  if (appendQueueSample(sample)) uploadQueue(captureMillis);
-  else Serial.println("Flash queue append failed; skipping upload and retaining previous records.");
+  const bool currentSampleSaved = appendQueueSample(sample);
+  if (!currentSampleSaved)
+    Serial.println("Flash queue append failed; current sample not confirmed, attempting saved backlog.");
+  // A failed new write must not prevent delivery of older, CRC-verified records.
+  uploadQueue(captureMillis, currentSampleSaved);
   WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
   // Show results with the radio already off to minimize energy use.
   indicateCheck("2 internet/cloud reachability", internetReached, 1000);

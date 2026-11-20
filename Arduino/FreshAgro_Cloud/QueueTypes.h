@@ -1,11 +1,10 @@
 #pragma once
 #include <Arduino.h>
 
-// The 14-day retention window scales with the configured sampling interval.
-// At the default 10-minute cycle this is 2,016 samples; at 1 minute it is 20,160.
+// This partition reliably holds a 2,016-record SPIFFS ring with room for garbage collection.
+// That covers 14 days at the default 10-minute cycle. Faster cycles retain fewer days.
 constexpr uint32_t OFFLINE_RETENTION_DAYS = 14;
-constexpr uint32_t MAX_CYCLE_MINUTES = 1;
-constexpr uint32_t MAX_STORAGE_RECORDS = OFFLINE_RETENTION_DAYS * 24 * 60 / MAX_CYCLE_MINUTES;
+constexpr uint32_t MAX_STORAGE_RECORDS = OFFLINE_RETENTION_DAYS * 24 * 60 / 10;
 constexpr uint32_t LEGACY_QUEUE_CAPACITY = 72;
 constexpr uint32_t UPLOAD_BATCH_SIZE = 72; // Supabase ingest accepts at most 72 rows.
 constexpr uint32_t WIFI_CONNECT_MS = 20000;

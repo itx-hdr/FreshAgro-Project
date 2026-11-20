@@ -4,15 +4,15 @@ This folder collects the deployable FreshAgro source in one place. The latest cl
 
 ## Project flow
 
-![FreshAgro sensor-to-dashboard flow chart](docs/PROJECT_FLOW.svg)
+![FreshAgro sensor-to-dashboard flow chart](Docs/PROJECT_FLOW.svg)
 
-[Open the flow chart notes](docs/PROJECT_FLOW.md).
+[Open the flow chart notes](Docs/PROJECT_FLOW.md).
 
 ## Hardware photos
 
 | Sensor and controller side | Battery and reverse side |
 |:--:|:--:|
-| ![FreshAgro sensor and ESP32-C3 assembly](docs/hardware/hardware-sensor-side.jpeg) | ![FreshAgro battery pack and board reverse side](docs/hardware/hardware-battery-side.jpeg) |
+| ![FreshAgro sensor and ESP32-C3 assembly](Docs/hardware/hardware-sensor-side.jpeg) | ![FreshAgro battery pack and board reverse side](Docs/hardware/hardware-battery-side.jpeg) |
 
 ## Project parts
 
@@ -29,7 +29,7 @@ The sketch can use WPA2-Personal or WPA2-Enterprise; institution-specific EAP se
 
 ## Offline queue
 
-The cloud firmware keeps a CRC-checked, fixed-slot queue in the existing SPIFFS partition, with small progress metadata in NVS. At the default 10-minute cycle it holds **2,016 readings (14 days)**; capacity scales to the configured interval, up to 20,160 records at one minute. The current 72-reading NVS queue is migrated on first boot, and its old copy remains until the flash records and metadata are saved. Uploads contain at most 72 samples and send up to four batches per wake. Server HTTP 200 advances the saved queue cursor; unacknowledged records are retried with stable IDs. If the 14-day window fills, the oldest unacknowledged samples expire. The queue firmware is compiled but needs a hardware upload and offline-recovery test.
+The cloud firmware keeps a CRC-checked, fixed-slot queue in the existing SPIFFS partition, with small progress metadata in NVS. The compact ring holds **2,016 readings (14 days at the default 10-minute cycle)**. Faster cycles retain fewer days. A previous, larger ring remains readable while it has pending data and is retired on a later boot after it drains. The older 72-reading NVS queue is migrated on first boot, and its old copy remains until the flash records and metadata are saved. Uploads contain at most 72 samples and send up to four batches per wake. Server HTTP 200 advances the saved queue cursor; unacknowledged records are retried with stable IDs. If the ring fills, the oldest unacknowledged samples expire.
 
 ## Supabase deployment
 
@@ -37,6 +37,6 @@ The deployed project is `ucqfewqkwvmfitkibcvh`. The migration in `Supabase/migra
 
 ## Validation and current status
 
-Run the available tests with `node --test Tests/*.test.mjs`. The dashboard is deployed and the project records document a successful HTTPS batch upload and HTTP 200 acknowledgement from the ESP32 over the temporary Pie hotspot, with ten genuine samples visible in Supabase. The 10-minute battery-input current and a sustained unattended sleep/wake cycle have not been measured/verified.
+Run the available tests with `node --test Tests/*.test.mjs`. The dashboard is deployed. On 2026-11-20, the ESP32-C3 connected through the 2.4 GHz Pie hotspot, uploaded its saved backlog to Supabase, migrated to the compact ring, and acknowledged a newly captured reading with zero pending records. Supabase contained 1,062 readings after that check. One incomplete old flash record could not be recovered; its raw bytes remain in the private flash backup. The 10-minute battery-input current and a sustained unattended sleep/wake cycle have not been measured/verified.
 
-The previous cloud sketch is recorded as uploaded through Arduino IDE with its flash hash checked. The new 14-day queue revision compiles for ESP32-C3 but has not yet been uploaded or physically tested. The source and required sketch headers are included here. No private local configuration or compiled firmware binary is included; recreate local settings from the example before uploading.
+The board was flashed with the clean cloud firmware and tested through a physical reset. The source and required sketch headers are included here. No private local configuration or compiled firmware binary is included; recreate local settings from the example before uploading.
