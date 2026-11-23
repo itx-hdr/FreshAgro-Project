@@ -8,6 +8,7 @@ constexpr uint32_t MAX_STORAGE_RECORDS = OFFLINE_RETENTION_DAYS * 24 * 60 / 10;
 constexpr uint32_t LEGACY_QUEUE_CAPACITY = 72;
 constexpr uint32_t UPLOAD_BATCH_SIZE = 72; // Supabase ingest accepts at most 72 rows.
 constexpr uint32_t WIFI_CONNECT_MS = 20000;
+constexpr uint32_t ENTERPRISE_CONNECT_MS = 60000;
 constexpr uint32_t SENSOR_SETTLE_MS = 2000; // Sensors remain externally powered.
 constexpr uint32_t NETWORK_BUDGET_MS = 45000;
 constexpr uint8_t MAX_BATCHES_PER_WAKE = 4;

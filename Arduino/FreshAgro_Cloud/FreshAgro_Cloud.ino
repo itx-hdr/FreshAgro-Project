@@ -14,6 +14,11 @@
 #include <esp_timer.h>
 #include <esp_system.h>
 #include <esp_eap_client.h>
+#include <esp_wifi.h>
+#include <esp_heap_caps.h>
+#include <esp_log.h>
+#include <stdarg.h>
+#include <mbedtls/x509_crt.h>
 #include <esp_sntp.h>
 #include <sys/time.h>
 #include <time.h>
@@ -228,7 +233,27 @@ bool dataStored = false;
 const char *lastNetworkAttempt = "none";
 volatile uint16_t lastDisconnectReason = 0;
 RTC_DATA_ATTR volatile bool clockTrusted = false;
-constexpr time_t BUILD_TIME_FLOOR = 1792354288; // Bootstrap EAP cert dates only, never sample time.
+// Bootstrap certificate dates from this build, never mark it as trusted sample time.
+time_t buildTimeFloor() {
+  const char *months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+  const char month[] = {__DATE__[0], __DATE__[1], __DATE__[2], '\0'};
+  // Fixed compiler formats avoid pulling the large scanf parser into flash.
+  const int day = (__DATE__[4] == ' ' ? 0 : __DATE__[4] - '0') * 10 + __DATE__[5] - '0';
+  const int year = (__DATE__[7] - '0') * 1000 + (__DATE__[8] - '0') * 100 +
+                   (__DATE__[9] - '0') * 10 + __DATE__[10] - '0';
+  struct tm built{};
+  built.tm_mon = (strstr(months, month) - months) / 3;
+  built.tm_year = year - 1900; built.tm_mday = day;
+  // Midnight is a conservative lower bound regardless of build-host timezone.
+  return mktime(&built);
+}
+
+int usbSecurityLog(const char *format, va_list args) {
+  char message[384];
+  int length = vsnprintf(message, sizeof(message), format, args);
+  Serial.print(message);
+  return length;
+}
 void clockSynced(struct timeval *) { clockTrusted = true; }
 
 constexpr char QUEUE_FILE[] = "/freshagro-ring.bin";
@@ -557,6 +582,20 @@ bool eapChecked(const char *stage, esp_err_t result) {
   return result == ESP_OK;
 }
 
+bool enterpriseCaParses() {
+  mbedtls_x509_crt certificates;
+  mbedtls_x509_crt_init(&certificates);
+  // PEM lengths must include NUL. The EAP setter only stores the pointer/length;
+  // ESP_OK from that setter does not mean the certificates could be parsed.
+  const int result = mbedtls_x509_crt_parse(&certificates,
+      reinterpret_cast<const unsigned char *>(EAP_CA), strlen(EAP_CA) + 1);
+  unsigned count = 0;
+  for (const mbedtls_x509_crt *crt = &certificates; crt && crt->raw.len; crt = crt->next) ++count;
+  Serial.printf("EAP CA parse: result=%d certificates=%u.\n", result, count);
+  mbedtls_x509_crt_free(&certificates);
+  return result == 0 && count > 0;
+}
+
 bool connectEnterprise(bool &eapEnabled) {
   lastDisconnectReason = 0;
   // A directed scan avoids a full enterprise timeout when the SSID is absent.
@@ -573,27 +612,43 @@ bool connectEnterprise(bool &eapEnabled) {
     Serial.println("eduroam profile incomplete; trusted CA bundle, server domain and credentials are required.");
     return false;
   }
+  if (!enterpriseCaParses()) {
+    Serial.println("eduroam CA bundle could not be parsed; trying backup Wi-Fi.");
+    return false;
+  }
   // Verify server identity before releasing inner credentials. No CA-free fallback.
-  if (time(nullptr) < BUILD_TIME_FLOOR) {
-    struct timeval bootstrap = {BUILD_TIME_FLOOR, 0}; settimeofday(&bootstrap, nullptr);
+  const time_t buildFloor = buildTimeFloor();
+  if (time(nullptr) < buildFloor) {
+    struct timeval bootstrap = {buildFloor, 0}; settimeofday(&bootstrap, nullptr);
   }
   const char *outerIdentity = strlen(EAP_IDENTITY) ? EAP_IDENTITY : EAP_USERNAME;
+  // Configure the station before enabling EAP; start the connection separately
+  // so driver errors are visible instead of becoming an unexplained timeout.
+  WiFi.begin(ENTERPRISE_SSID, nullptr, 0, nullptr, false);
+  wifi_config_t stationConfig{};
+  if (!eapChecked("station config", esp_wifi_get_config(WIFI_IF_STA, &stationConfig)) ||
+      strncmp(reinterpret_cast<const char *>(stationConfig.sta.ssid), ENTERPRISE_SSID, 32) != 0) {
+    Serial.println("Enterprise station SSID was not applied.");
+    return false;
+  }
   // Arduino's enterprise overload discards these return codes. Check each one.
   // The connected laptop confirms PEAP/MSCHAPv2 for this network.
   if (!eapChecked("PEAP method", esp_eap_client_set_eap_methods(ESP_EAP_TYPE_PEAP)) ||
       !eapChecked("server domain", esp_eap_client_set_domain_name(EAP_SERVER_DOMAIN)) ||
       !eapChecked("certificate dates", esp_eap_client_set_disable_time_check(false)) ||
       !eapChecked("trusted CA bundle", esp_eap_client_set_ca_cert(
-          reinterpret_cast<const unsigned char *>(EAP_CA), strlen(EAP_CA))) ||
+          reinterpret_cast<const unsigned char *>(EAP_CA), strlen(EAP_CA) + 1)) ||
       !eapChecked("identity", esp_eap_client_set_identity(reinterpret_cast<const unsigned char *>(outerIdentity), strlen(outerIdentity))) ||
       !eapChecked("username", esp_eap_client_set_username(reinterpret_cast<const unsigned char *>(EAP_USERNAME), strlen(EAP_USERNAME))) ||
       !eapChecked("password", esp_eap_client_set_password(reinterpret_cast<const unsigned char *>(EAP_PASSWORD), strlen(EAP_PASSWORD))) ||
       !eapChecked("enable", esp_wifi_sta_enterprise_enable())) return false;
   eapEnabled = true;
   Serial.println("Searching for eduroam; PEAP with trusted CA bundle/domain/date checks enabled.");
-  WiFi.begin(ENTERPRISE_SSID);
+  Serial.printf("EAP memory: free=%u largest=%u bytes.\n", unsigned(ESP.getFreeHeap()),
+                unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+  if (!eapChecked("start connection", esp_wifi_connect())) return false;
   const uint32_t connectStarted = millis();
-  while (WiFi.status() != WL_CONNECTED && uint32_t(millis() - connectStarted) < WIFI_CONNECT_MS) delay(50);
+  while (WiFi.status() != WL_CONNECTED && uint32_t(millis() - connectStarted) < ENTERPRISE_CONNECT_MS) delay(50);
   if (WiFi.status() != WL_CONNECTED) {
     Serial.printf("eduroam timeout status=%d reason=%u.\n", int(WiFi.status()), unsigned(lastDisconnectReason));
     return false;
@@ -696,8 +751,7 @@ void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
   bool eapEnabled = false;
   if (primaryNamed()) {
     lastNetworkAttempt = "eduroam";
-    const uint32_t started = millis();
-    if (connectEnterprise(eapEnabled)) uploadConnectedQueue(started, captureMillis, currentSampleSaved);
+    if (connectEnterprise(eapEnabled)) uploadConnectedQueue(millis(), captureMillis, currentSampleSaved);
     // A successful batch keeps eduroam as the network for this wake.
     if (dataStored) return;
   }
@@ -708,14 +762,15 @@ void uploadQueue(uint32_t captureMillis, bool currentSampleSaved) {
   WiFi.mode(WIFI_OFF); delay(50); WiFi.mode(WIFI_STA);
   internetReached = false; dataStored = false;
   lastNetworkAttempt = "backup Wi-Fi";
-  const uint32_t started = millis();
-  if (connectBackup()) uploadConnectedQueue(started, captureMillis, currentSampleSaved);
+  if (connectBackup()) uploadConnectedQueue(millis(), captureMillis, currentSampleSaved);
 }
 
 void setup() {
   const int64_t cycleStart = esp_timer_get_time();
   if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) clockTrusted = false;
   Serial.begin(115200);
+  // Route library errors to USB, since UART0 is occupied by the oxygen sensor.
+  esp_log_set_vprintf(usbSecurityLog);
   // Only manual/power resets offer a USB diagnostic window; timer wakes skip it.
   if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) delay(4000);
   Serial.printf("FreshAgro cloud boot: reset=%d wake=%d interval=%lu min\n", int(esp_reset_reason()),
